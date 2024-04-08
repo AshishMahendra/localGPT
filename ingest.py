@@ -8,7 +8,8 @@ from langchain.docstore.document import Document
 from langchain.text_splitter import Language, RecursiveCharacterTextSplitter
 from langchain.vectorstores import Chroma
 from utils import get_embeddings
-
+from langchain.document_loaders import UnstructuredFileLoader
+from PyPDF2 import PdfReader  # Assuming PyPDF2 is acceptable for PDF processing
 from constants import (
     CHROMA_SETTINGS,
     DOCUMENT_MAP,
@@ -24,6 +25,19 @@ def file_log(logentry):
     file1.write(logentry + "\n")
     file1.close()
     print(logentry + "\n")
+
+
+class PDFLoaderWithPageNumbers(UnstructuredFileLoader):
+    def __init__(self, file_path):
+        super().__init__(file_path)
+
+    def load_with_page_numbers(self):
+        documents = []
+        reader = PdfReader(self.file_path)
+        for i, page in enumerate(reader.pages):
+            text = page.extract_text()
+            documents.append(Document(content=text, metadata={"source": self.file_path, "page_number": i + 1}))
+        return documents
 
 
 def load_single_document(file_path: str) -> Document:
@@ -69,7 +83,6 @@ def load_documents(source_dir: str) -> list[Document]:
             source_file_path = os.path.join(root, file_name)
             if file_extension in DOCUMENT_MAP.keys():
                 paths.append(source_file_path)
-
     # Have at least one worker and at most INGEST_THREADS workers
     n_workers = min(INGEST_THREADS, max(len(paths), 1))
     chunksize = round(len(paths) / n_workers)
@@ -142,10 +155,16 @@ def split_documents(documents: list[Document]) -> tuple[list[Document], list[Doc
     ),
     help="Device to run on. (Default is cuda)",
 )
-def main(device_type):
+@click.option(
+    "--folder_path",
+    default=SOURCE_DIRECTORY,
+    type=str,
+    help="Path to the folder containing documents to ingest. (Default is 'SOURCE_DOCUMENTS')",
+)
+def main(device_type, folder_path):
     # Load documents and split in chunks
-    logging.info(f"Loading documents from {SOURCE_DIRECTORY}")
-    documents = load_documents(SOURCE_DIRECTORY)
+    logging.info(f"Loading documents from {folder_path}")
+    documents = load_documents(folder_path)
     text_documents, python_documents = split_documents(documents)
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     python_splitter = RecursiveCharacterTextSplitter.from_language(
@@ -153,7 +172,7 @@ def main(device_type):
     )
     texts = text_splitter.split_documents(text_documents)
     texts.extend(python_splitter.split_documents(python_documents))
-    logging.info(f"Loaded {len(documents)} documents from {SOURCE_DIRECTORY}")
+    logging.info(f"Loaded {len(documents)} documents from {folder_path}")
     logging.info(f"Split into {len(texts)} chunks of text")
 
     """

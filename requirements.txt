@@ -24,10 +24,10 @@ bitsandbytes-windows ; sys_platform == 'win32'
 click
 flask
 requests
-
+fastapi[all]
 # Streamlit related
 streamlit
 Streamlit-extras
-
+PyPDF2
 # Excel File Manipulation
 openpyxl
