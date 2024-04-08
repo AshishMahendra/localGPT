@@ -175,6 +175,37 @@ class PromptModel(BaseModel):
 #     return prompt_response_dict
 
 
+# @app.post("/api/prompt_route")
+# def prompt_route(prompt_model: PromptModel):
+#     global QA
+#     user_prompt = prompt_model.user_prompt
+#     with request_lock:
+#         # Get the answer from the chain
+#         print(f"User Prompt: {user_prompt}")
+#         res = QA(user_prompt)
+#         answer = res["result"]
+#         docs = res["source_documents"]
+
+#         prompt_response_dict = {
+#             "Prompt": user_prompt,
+#             "Answer": answer,
+#             "Sources": [
+#                 {
+#                     "PDF": os.path.basename(str(document.metadata["source"])),
+#                     "PageNumber": document.metadata.get("page_number"),  # Assuming this metadata is available
+#                     "Text": str(document.page_content),
+#                 }
+#                 for document in docs
+#             ],
+#         }
+
+#     return prompt_response_dict
+
+
+def suggest_refined_query(user_prompt, sources):
+    return "Could you specify which aspect of the 'slam tool' you are interested in?"
+
+
 @app.post("/api/prompt_route")
 def prompt_route(prompt_model: PromptModel):
     global QA
@@ -183,27 +214,78 @@ def prompt_route(prompt_model: PromptModel):
         # Get the answer from the chain
         print(f"User Prompt: {user_prompt}")
         res = QA(user_prompt)
-        answer = res["result"]
+        answer = res["result"].strip()
         docs = res["source_documents"]
+
+        # Use a set to avoid duplicate file names in the source list
+        seen_files = set()
+        source_list = []
+
+        if not answer or "I apologize" in answer or "there is no information" in answer:
+            for document in docs:
+                pdf_name = os.path.basename(document.metadata["source"])
+                if pdf_name not in seen_files:
+                    seen_files.add(pdf_name)
+                    source_list.append({"PDF": pdf_name})
+            answer = "I apologize, but I'm unable to find detailed information on this topic. Please refer to the following sources for more information."
+        else:
+            for document in docs:
+                pdf_name = os.path.basename(document.metadata["source"])
+                source_list.append(
+                    {
+                        "PDF": pdf_name,
+                        "PageNumber": document.metadata.get("page_number"),
+                        "Text": str(document.page_content),
+                    }
+                )
 
         prompt_response_dict = {
             "Prompt": user_prompt,
             "Answer": answer,
-            "Sources": [
-                {
-                    "PDF": os.path.basename(str(document.metadata["source"])),
-                    "PageNumber": document.metadata.get("page_number"),  # Assuming this metadata is available
-                    "Text": str(document.page_content),
-                }
-                for document in docs
-            ],
+            "Sources": source_list,
         }
 
     return prompt_response_dict
 
 
-# Define the command-line arguments for the Uvicorn server if needed
-# Run the server using `uvicorn.run()` with those arguments
+# @app.post("/api/prompt_route")
+# def prompt_route(prompt_model: PromptModel):
+#     global QA
+#     user_prompt = prompt_model.user_prompt
+#     with request_lock:
+#         print(f"User Prompt: {user_prompt}")
+#         res = QA(user_prompt)
+#         answer = res["result"]
+#         docs = res["source_documents"]
+
+#         if not answer.strip():
+#             answer = "I apologize, but I'm not familiar with your query. " + suggest_refined_query(user_prompt, docs)
+
+#         prompt_response_dict = {
+#             "Prompt": user_prompt,
+#             "Answer": answer,
+#             "Sources": [
+#                 {
+#                     "PDF": os.path.basename(str(document.metadata["source"])),
+#                     "PageNumber": document.metadata.get("page_number"),
+#                     "Text": str(document.page_content),
+#                 }
+#                 for document in docs
+#             ],
+#         }
+#     return prompt_response_dict
+
+
+class FeedbackModel(BaseModel):
+    user_prompt: str
+    feedback: str
+
+
+@app.post("/api/feedback")
+def receive_feedback(feedback: FeedbackModel):
+    print(f"Received feedback for '{feedback.user_prompt}': {feedback.feedback}")
+    return {"message": "Thank you for your feedback!"}
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8500)

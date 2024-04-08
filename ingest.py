@@ -1,7 +1,7 @@
 import logging
 import os
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-
+import shutil
 import click
 import torch
 from langchain.docstore.document import Document
@@ -27,34 +27,51 @@ def file_log(logentry):
     print(logentry + "\n")
 
 
-class PDFLoaderWithPageNumbers(UnstructuredFileLoader):
-    def __init__(self, file_path):
-        super().__init__(file_path)
+# def load_single_document(file_path: str) -> Document:
+#     # Loads a single document from a file path
+#     try:
+#         file_extension = os.path.splitext(file_path)[1]
+#         loader_class = DOCUMENT_MAP.get(file_extension)
+#         if loader_class:
+#             file_log(file_path + " loaded.")
+#             loader = loader_class(file_path)
+#         else:
+#             file_log(file_path + " document type is undefined.")
+#             raise ValueError("Document type is undefined")
+#         return loader.load()[0]
+#     except Exception as ex:
+#         file_log("%s loading error: \n%s" % (file_path, ex))
+#         return None
+def clear_existing_data():
+    # This function should contain the logic to clear the database
+    # Example for file-based storage:
+    if os.path.exists(PERSIST_DIRECTORY):
+        for file in os.listdir(PERSIST_DIRECTORY):
+            file_path = os.path.join(PERSIST_DIRECTORY, file)
+            if os.path.isfile(file_path):
+                os.unlink(file_path)
+            elif os.path.isdir(file_path):  # remove directory if directory persistence is used
+                shutil.rmtree(file_path)
+    logging.info("Cleared existing data from the database.")
 
-    def load_with_page_numbers(self):
-        documents = []
-        reader = PdfReader(self.file_path)
-        for i, page in enumerate(reader.pages):
-            text = page.extract_text()
-            documents.append(Document(content=text, metadata={"source": self.file_path, "page_number": i + 1}))
-        return documents
 
-
-def load_single_document(file_path: str) -> Document:
-    # Loads a single document from a file path
+def load_pdf_document(file_path: str) -> list[Document]:
+    documents = []
     try:
-        file_extension = os.path.splitext(file_path)[1]
-        loader_class = DOCUMENT_MAP.get(file_extension)
-        if loader_class:
-            file_log(file_path + " loaded.")
-            loader = loader_class(file_path)
-        else:
-            file_log(file_path + " document type is undefined.")
-            raise ValueError("Document type is undefined")
-        return loader.load()[0]
+        reader = PdfReader(file_path)
+        num_pages = len(reader.pages)
+        for i in range(num_pages):
+            page = reader.pages[i]
+            text = page.extract_text()
+            if text:
+                doc = Document(
+                    page_content=text,
+                    metadata={"source": file_path, "page_number": i + 1},  # Page numbers are generally 1-based
+                )
+                documents.append(doc)
     except Exception as ex:
-        file_log("%s loading error: \n%s" % (file_path, ex))
-        return None
+        file_log(f"{file_path} loading error: {ex}")
+    return documents
 
 
 def load_document_batch(filepaths):
@@ -62,7 +79,7 @@ def load_document_batch(filepaths):
     # create a thread pool
     with ThreadPoolExecutor(len(filepaths)) as exe:
         # load files
-        futures = [exe.submit(load_single_document, name) for name in filepaths]
+        futures = [exe.submit(load_pdf_document, name) for name in filepaths]
         # collect data
         if futures is None:
             file_log(name + " failed to submit")
@@ -113,16 +130,16 @@ def load_documents(source_dir: str) -> list[Document]:
     return docs
 
 
-def split_documents(documents: list[Document]) -> tuple[list[Document], list[Document]]:
-    # Splits documents for correct Text Splitter
+def split_documents(documents_list: list) -> tuple[list[Document], list[Document]]:
     text_docs, python_docs = [], []
-    for doc in documents:
-        if doc is not None:
-            file_extension = os.path.splitext(doc.metadata["source"])[1]
-            if file_extension == ".py":
-                python_docs.append(doc)
-            else:
-                text_docs.append(doc)
+    for docs in documents_list:  # Here, each `docs` is expected to be a list of Document objects
+        for doc in docs:  # Iterate over each Document in the list
+            if doc is not None:
+                file_extension = os.path.splitext(doc.metadata["source"])[1]
+                if file_extension == ".py":
+                    python_docs.append(doc)
+                else:
+                    text_docs.append(doc)
     return text_docs, python_docs
 
 
@@ -162,7 +179,7 @@ def split_documents(documents: list[Document]) -> tuple[list[Document], list[Doc
     help="Path to the folder containing documents to ingest. (Default is 'SOURCE_DOCUMENTS')",
 )
 def main(device_type, folder_path):
-    # Load documents and split in chunks
+    clear_existing_data()
     logging.info(f"Loading documents from {folder_path}")
     documents = load_documents(folder_path)
     text_documents, python_documents = split_documents(documents)
