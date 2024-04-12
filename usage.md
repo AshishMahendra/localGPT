@@ -9,7 +9,7 @@ conda activate localGPT
 ```
 #### Running the API Server
 ```bash
-uvicorn main:app --host 0.0.0.0 --port 8500
+uvicorn local_gpt_fast_api:app --host 0.0.0.0 --port 8500
 ```
 #### Base URL
 All URLs referenced in the documentation have the following base:
