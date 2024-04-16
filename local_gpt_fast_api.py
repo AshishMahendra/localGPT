@@ -96,6 +96,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 def reinitialize_components():
     global DB, RETRIEVER, QA
     DB = Chroma(
@@ -147,19 +148,19 @@ def prompt_route(prompt_model: PromptModel):
 
         if not answer or "I apologize" in answer or "there is no information" in answer:
             for document in docs:
-                pdf_name = os.path.basename(document.metadata["source"])
+                pdf_name = document.metadata["source"]
                 if pdf_name not in seen_files:
                     seen_files.add(pdf_name)
                     source_list.append({"PDF": pdf_name})
             answer = "I apologize, but I'm unable to find detailed information on this topic. Please refer to the following sources for more information."
         else:
             for document in docs:
-                pdf_name = os.path.basename(document.metadata["source"])
+                pdf_name = document.metadata["source"]
                 source_list.append(
                     {
-                        "PDF": pdf_name,
-                        "PageNumber": document.metadata.get("page_number"),
-                        "Text": str(document.page_content),
+                        "filename": pdf_name,
+                        "pageNumber": document.metadata.get("page_number"),
+                        "highlightText": str(document.page_content),
                     }
                 )
 
