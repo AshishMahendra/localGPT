@@ -1,7 +1,7 @@
 import logging
 import os
 import shutil
-
+import tempfile
 import httpx
 from io import BytesIO
 import traceback
@@ -9,6 +9,8 @@ from langchain.docstore.document import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.vectorstores import Chroma
 from utils import get_embeddings
+from langchain.document_loaders import UnstructuredFileLoader
+import re
 from PyPDF2 import PdfReader
 from constants import (
     CHROMA_SETTINGS,
@@ -16,12 +18,24 @@ from constants import (
     PERSIST_DIRECTORY,
 )
 
+import pdfplumber
+
 
 def file_log(logentry):
     file1 = open("file_ingest.log", "a")
     file1.write(logentry + "\n")
     file1.close()
     print(logentry + "\n")
+
+
+def fix_broken_words(text):
+    hyphenated_words_pattern = r"(\w+-\n\w+)"
+
+    def _fix_match(match):
+        return match.group(1).replace("-\n", "")
+
+    fixed_text = re.sub(hyphenated_words_pattern, _fix_match, text)
+    return fixed_text
 
 
 def clear_existing_data():
@@ -35,20 +49,67 @@ def clear_existing_data():
     logging.info("Cleared existing data from the database.")
 
 
-def load_pdf_document(file_content: str, url) -> list[Document]:
+def load_pdf_document(file_content: BytesIO, url) -> list[Document]:
     documents = []
     try:
-        reader = PdfReader(file_content)
-        num_pages = len(reader.pages)
-        for i in range(num_pages):
-            page = reader.pages[i]
-            text = page.extract_text()
-            if text:
-                doc = Document(page_content=text, metadata={"source": url, "page_number": i + 1})
-                documents.append(doc)
+        with pdfplumber.open(file_content) as pdf:
+            for i, page in enumerate(pdf.pages):
+                text = page.extract_text()
+                if text:
+                    doc = Document(page_content=text, metadata={"source": url, "page_number": i + 1})
+                    documents.append(doc)
     except Exception as ex:
         logging.error(f"Error loading PDF document from {url}: {ex}")
     return documents
+
+
+# def load_pdf_document(file_content: str, url) -> list[Document]:
+#     documents = []
+#     try:
+#         reader = PdfReader(file_content)
+#         num_pages = len(reader.pages)
+#         for i in range(num_pages):
+#             page = reader.pages[i]
+#             text = page.extract_text()
+#             if text:
+#                 text = fix_broken_words(text)
+#                 doc = Document(page_content=text, metadata={"source": url, "page_number": i + 1})
+#                 documents.append(doc)
+#     except Exception as ex:
+#         logging.error(f"Error loading PDF document from {url}: {ex}")
+#     return documents
+
+
+# def load_pdf_document(file_content: bytes, url: str) -> list[Document]:
+#     documents = []
+#     try:
+#         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+#             tmp_file.write(file_content)
+#             tmp_file_path = tmp_file.name
+
+#         # Use the temporary file path with UnstructuredFileLoader
+#         loader = UnstructuredFileLoader(tmp_file_path)
+#         loaded_documents = loader.load()  # Adjust based on how the loader returns content
+
+#         for loaded_doc in loaded_documents:
+#             # Assuming each loaded_doc is a Document object, we retrieve its page_content.
+#             text = loaded_doc.page_content if hasattr(loaded_doc, "page_content") else None
+#             if text:
+#                 text = fix_broken_words(text)
+#                 # Create a new Document object with fixed text and the correct metadata
+#                 doc = Document(
+#                     page_content=text, metadata={"source": url, "page_number": loaded_doc.metadata["page_number"]}
+#                 )
+#                 documents.append(doc)
+
+#     except Exception as ex:
+#         logging.error(f"Error loading PDF document from {url}: {ex}")
+#     finally:
+#         # Clean up the temporary file
+#         if tmp_file_path:
+#             os.unlink(tmp_file_path)
+
+#     return documents
 
 
 async def process_documents(file_urls, device_type):
@@ -65,7 +126,7 @@ async def process_documents(file_urls, device_type):
                     documents = load_pdf_document(pdf_file, url)
                     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
                     texts = text_splitter.split_documents(documents)
-                    logging.info(f"Loaded {len(documents)} documents from {pdf_file}")
+                    logging.info(f"Loaded {len(documents)} documents from {url}")
                     logging.info(f"Split into {len(texts)} chunks of text")
                     full_texts.extend(texts)
             except Exception as e:
