@@ -9,12 +9,10 @@ from langchain.chains import RetrievalQA
 from langchain.embeddings import HuggingFaceInstructEmbeddings
 import traceback
 from fastapi.middleware.cors import CORSMiddleware
-
 from run_localGPT import load_model
 from prompt_template_utils import get_prompt_template
-
 from langchain.vectorstores import Chroma
-from ingest import process_documents
+from ingest import process_documents, highlight_text_in_pdf
 from constants import (
     CHROMA_SETTINGS,
     EMBEDDING_MODEL_NAME,
@@ -22,7 +20,10 @@ from constants import (
     MODEL_ID,
     MODEL_BASENAME,
 )
-
+import tempfile
+import httpx
+import boto3
+from urllib.parse import urlparse
 from threading import Lock
 from pydantic import BaseModel, HttpUrl
 from typing import List
@@ -182,6 +183,65 @@ class FeedbackModel(BaseModel):
 def receive_feedback(feedback: FeedbackModel):
     print(f"Received feedback for '{feedback.user_prompt}': {feedback.feedback}")
     return {"message": "Thank you for your feedback!"}
+
+
+class HighlightRequest(BaseModel):
+    pdf_name: str
+    page_number: int
+    highlight_text: str
+
+
+def upload_image_to_s3(image_path, bucket, object_name):
+    s3_client = boto3.client("s3")
+    try:
+        s3_client.upload_file(image_path, bucket, object_name)
+        return f"https://{bucket}.s3.amazonaws.com/{object_name}"
+    except Exception as e:
+        logging.error(f"Failed to upload {image_path} to {bucket}/{object_name}: {e}")
+        return str(e)
+
+
+@app.post("/api/highlight_pdf")
+def highlight_pdf_endpoint(highlight_requests: List[HighlightRequest]):
+    results = []
+
+    for request in highlight_requests:
+        pdf_path = None  # Initialize to ensure cleanup in the `finally` block
+        try:
+            # Extract bucket and key information from the original URL
+            parsed_url = urlparse(request.pdf_name)
+            bucket = parsed_url.netloc.split(".")[0]
+            key_prefix = os.path.dirname(parsed_url.path).strip("/")
+
+            # Download the file from the provided URL to a temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+                response = httpx.get(request.pdf_name)
+                response.raise_for_status()
+                tmp_file.write(response.content)
+                pdf_path = tmp_file.name
+
+            # Highlight the text in the PDF
+            highlighted_pdf = highlight_text_in_pdf(pdf_path, request.page_number, request.highlight_text)
+
+            # Upload the highlighted image back to the S3 bucket
+            image_name = f"{key_prefix}/highlighted_page_{request.page_number}.png"
+            s3_image_url = upload_image_to_s3(highlighted_pdf, bucket, image_name)
+
+            # Add the result with the S3 URL of the highlighted image
+            results.append({"pdf_name": request.pdf_name, "highlighted_image": s3_image_url})
+
+        except Exception as e:
+            logging.error(f"Error highlighting {request.pdf_name}: {e}")
+            results.append({"pdf_name": request.pdf_name, "error": str(e)})
+
+        finally:
+            # Clean up the temporary file after processing
+            clean_temp = [pdf_path, highlighted_pdf]
+            for c_image in clean_temp:
+                if pdf_path and os.path.exists(c_image):
+                    os.remove(c_image)
+
+    return results
 
 
 if __name__ == "__main__":
