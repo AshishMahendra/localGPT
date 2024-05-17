@@ -16,6 +16,7 @@ from constants import (
 import difflib
 import pdfplumber
 import pdfplumber
+import re
 
 
 def file_log(logentry):
@@ -50,14 +51,6 @@ def load_pdf_document(file_content: BytesIO, pdf_path):
     return documents
 
 
-def preprocess_text(text):
-    """Lowercase, remove hyphenation and extra spaces from text."""
-    # Remove hyphens that might have been incorrectly added at line breaks
-    text = text.replace("-\n", "")
-    text = text.replace("\n", " ")
-    return " ".join(text.lower().strip().split())
-
-
 def debug_extract_words(page):
     """Debug function to extract words from the page, with added details."""
     words = page.extract_words(keep_blank_chars=True)
@@ -65,50 +58,69 @@ def debug_extract_words(page):
     return words
 
 
+def preprocess_text(text):
+    """Remove non-alphanumeric characters, except necessary punctuation, and normalize spaces and case."""
+    text = re.sub(r"[^\w\s-]", "", text)  # Keep alphanumeric, whitespace, hyphens
+    text = re.sub(r"\s+", " ", text)  # Reduce multiple spaces to a single space
+    return text.lower().strip()
+
+
 def find_text_positions(page, search_text):
-    """Find bounding boxes for text matches with improved matching logic."""
+    """Improved logic to handle text matches that start or end mid-word."""
+    # print("Original Search Text:", search_text)
     search_text = preprocess_text(search_text)
-    words = debug_extract_words(page)  # Debugging text extraction with visual output
+    # print("Preprocessed Search Text:", search_text)
+
+    words = debug_extract_words(page)  # Assuming this function returns word boundaries accurately
     page_text = preprocess_text(" ".join([word["text"] for word in words]))
-    matcher = difflib.SequenceMatcher(None, page_text, search_text)
-    matches = [match for match in matcher.get_matching_blocks() if match.size > 0]
+    # print("Full Page Text:", page_text)
+
+    # Create a continuous index for word positions in the page text
+    word_positions = []
+    current_index = 0
+    for word in words:
+        start = current_index
+        end = start + len(preprocess_text(word["text"]))
+        word_positions.append((start, end, word))
+        current_index = end + 1  # Account for space between words
+
+    # Use regex for finding overlapping matches
+    pattern = re.compile(re.escape(search_text), re.IGNORECASE)
+    matches = list(pattern.finditer(page_text))
 
     bounding_boxes = []
-    current_word_index = 0
-    for word in words:
-        word_text = preprocess_text(word["text"])
-        word_len = len(word_text)
-
-        # Check if current word is within any match range
-        if any(match.a <= current_word_index < match.a + match.size for match in matches):
-            bounding_boxes.append((word["x0"], word["top"], word["x1"], word["bottom"]))
-
-        current_word_index += len(preprocess_text(word["text"] + " "))
+    for match in matches:
+        match_start, match_end = match.start(), match.end()
+        # Collect words that overlap with the match
+        for start, end, word in word_positions:
+            if start < match_end and end > match_start:  # Check for any overlap
+                bounding_boxes.append((word["x0"], word["top"], word["x1"], word["bottom"]))
 
     return bounding_boxes
 
 
 def highlight_text_in_pdf(pdf_path, page_number, highlight_text):
-    """Highlight the specified text on the given page."""
+    """Highlight the specified text on the given page with enhanced debugging."""
     try:
         with pdfplumber.open(pdf_path) as pdf:
             page = pdf.pages[page_number - 1]
-            print(f"Highlighting text on Page {page_number}")
+            words = debug_extract_words(page)  # Extract words with visual debugging
 
-            # Extract bounding boxes for the specified text
+            # print(f"Page {page_number} - Extracted Text: {' '.join([word['text'] for word in words])}")
             bounding_boxes = find_text_positions(page, highlight_text)
-            page_image = page.to_image(resolution=400)
 
+            if not bounding_boxes:
+                print("No matching text found.")
+                return None
+
+            page_image = page.to_image(resolution=400)
             for box in bounding_boxes:
-                page_image.draw_rect(
-                    box,
-                    fill=(255, 255, 0, 64),  # Semi-transparent yellow fill
-                    stroke="orange",  # Vivid orange stroke
-                    stroke_width=3,  # Slightly thicker stroke
-                )
+                page_image.draw_rect(box, fill=(255, 255, 0, 64), stroke="orange", stroke_width=3)
+
             output_file_path = f"highlighted_page_{page_number}.png"
             page_image.save(output_file_path, quality=95)
             print(f"Highlighted text saved to {output_file_path}")
+
             return output_file_path
 
     except Exception as e:

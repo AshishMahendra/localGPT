@@ -223,22 +223,28 @@ def highlight_pdf_endpoint(highlight_requests: List[HighlightRequest]):
             # Highlight the text in the PDF
             highlighted_pdf = highlight_text_in_pdf(pdf_path, request.page_number, request.highlight_text)
 
-            # Upload the highlighted image back to the S3 bucket
-            image_name = f"{key_prefix}/highlighted_page_{request.page_number}.png"
-            s3_image_url = upload_image_to_s3(highlighted_pdf, bucket, image_name)
+            if highlighted_pdf:  # Check if a highlighted image was actually created
+                # Upload the highlighted image back to the S3 bucket
+                image_name = f"{key_prefix}/highlighted_page_{request.page_number}.png"
+                s3_image_url = upload_image_to_s3(highlighted_pdf, bucket, image_name)
 
-            # Add the result with the S3 URL of the highlighted image
-            results.append({"pdf_name": request.pdf_name, "highlighted_image": s3_image_url})
+                # Add the result with the S3 URL of the highlighted image
+                results.append({"pdf_name": request.pdf_name, "highlighted_image": s3_image_url})
+            else:
+                # Handle case where no text was found or no image was created
+                results.append(
+                    {"pdf_name": request.pdf_name, "error": "No matching text found or failed to create highlight."}
+                )
 
         except Exception as e:
             logging.error(f"Error highlighting {request.pdf_name}: {e}")
             results.append({"pdf_name": request.pdf_name, "error": str(e)})
 
         finally:
-            # Clean up the temporary file after processing
+            # Clean up the temporary files after processing
             clean_temp = [pdf_path, highlighted_pdf]
             for c_image in clean_temp:
-                if pdf_path and os.path.exists(c_image):
+                if c_image and os.path.exists(c_image):
                     os.remove(c_image)
 
     return results
