@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+fitz
+spacy
+scikit-learn
+sentence-transformers
+openai
+httpx
+boto3
+pydantic
+langchain
