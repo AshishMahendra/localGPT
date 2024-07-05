@@ -1,5 +1,5 @@
 import pdfplumber
-from pdf_processing import preprocess_text
+from .pdf_processing import preprocess_text
 import re
 
 

@@ -1,9 +1,8 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from typing import List
 from utils.pdf_processing import process_documents
-from utils.question_answering import answer_question_from_pdf
+from utils.question_answering import answer_question
 from utils.highlight import highlight_text_in_pdf
 import os
 import logging
@@ -11,46 +10,9 @@ import traceback
 import tempfile
 import httpx
 import boto3
-import uvicorn
 from urllib.parse import urlparse
 from threading import Lock
-
-
-class FileInfo(BaseModel):
-    id: int
-    name: str
-    file: str
-
-
-class FolderInfo(BaseModel):
-    id: int
-    uid: str
-    name: str
-    slug: str
-    user_id: int
-    url: str
-    files: List[FileInfo]
-
-
-class DocumentData(BaseModel):
-    data: FolderInfo
-
-
-class QuestionRequest(BaseModel):
-    question: str
-    document_url: str
-
-
-class FeedbackModel(BaseModel):
-    user_prompt: str
-    feedback: str
-
-
-class HighlightRequest(BaseModel):
-    pdf_name: str
-    page_number: int
-    highlight_text: str
-
+from models.schemas import DocumentData, QuestionRequest, FeedbackModel, HighlightRequest
 
 app = FastAPI()
 
@@ -69,8 +31,8 @@ request_lock = Lock()
 async def ingest_from_json(document_data: DocumentData):
     file_urls = [file.file for file in document_data.data.files]
     try:
-        results = await process_documents(file_urls)
-        return {"message": "Documents processed and vectorstore updated successfully", "results": results}
+        await process_documents(file_urls)
+        return {"message": "Documents processed and vectorstore updated successfully"}
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
@@ -80,8 +42,37 @@ async def ingest_from_json(document_data: DocumentData):
 async def prompt_route(question_request: QuestionRequest):
     with request_lock:
         try:
-            answer, references = answer_question_from_pdf(question_request.document_url, question_request.question)
-            return {"answer": answer, "references": references}
+            answer, references = answer_question(question_request.question)
+            # Use a set to avoid duplicate file names in the source list
+            seen_files = set()
+            source_list = []
+
+            if not answer or "I apologize" in answer or "there is no information" in answer:
+                for document in references:
+                    pdf_name = document.metadata["source"]
+                    if pdf_name not in seen_files:
+                        seen_files.add(pdf_name)
+                        source_list.append({"PDF": pdf_name})
+                answer = "I apologize, but I'm unable to find detailed information on this topic. Please refer to the following sources for more information."
+            else:
+                for document in references:
+                    pdf_name = document.metadata["source"]
+                    source_list.append(
+                        {
+                            "filename": pdf_name,
+                            "pageNumber": document.metadata.get("page_number"),
+                            "highlightText": str(document.page_content),
+                        }
+                    )
+
+            prompt_response_dict = {
+                "Prompt": question_request.question,
+                "Answer": answer,
+                "Sources": source_list,
+            }
+
+            return prompt_response_dict
+
         except Exception as e:
             traceback.print_exc()
             raise HTTPException(status_code=500, detail=str(e))
@@ -142,4 +133,6 @@ def upload_image_to_s3(image_path, bucket, object_name):
 
 
 if __name__ == "__main__":
+    import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)

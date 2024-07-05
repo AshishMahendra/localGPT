@@ -24,7 +24,6 @@ class DocumentData(BaseModel):
 
 class QuestionRequest(BaseModel):
     question: str
-    document_url: str
 
 
 class FeedbackModel(BaseModel):

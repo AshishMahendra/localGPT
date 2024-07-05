@@ -8,7 +8,7 @@ from langchain.docstore.document import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import pdfplumber
 import re
-from utils.embeddings import get_embeddings, save_embeddings
+from utils.embeddings import save_embeddings
 
 
 def file_log(logentry):
@@ -63,8 +63,7 @@ async def process_documents(file_urls):
                     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
                     texts = text_splitter.split_documents(documents)
                     logging.info(f"Loaded {len(texts)} chunks of text from documents")
-                    embeddings = get_embeddings(texts)
-                    save_embeddings(embeddings, texts)
+                    save_embeddings(texts)
             except Exception as e:
                 traceback.print_exc()
                 logging.error(f"Error processing PDF from {url}: {e}")

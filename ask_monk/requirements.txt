@@ -8,4 +8,6 @@ openai
 httpx
 boto3
 pydantic
+tiktoken
 langchain
+langchain-community
